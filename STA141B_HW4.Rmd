@@ -1,0 +1,310 @@
+---
+title: "STA141B_HW4: Web Scraping"
+header-includes:
+  \usepackage{fvextra}
+  \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+In this assignment, I scraped information from Stack Overflow and returned the results in a data frame format. I constructed many helper and main functions to complete this assignment. For each helper function, I will briefly describe the purpose and how it plays a role in the grand scheme of things. My main functions for this assignments entailed:
+
+- Extracting information surrounding the question 
+- Extracting information surrounding the answers to each question
+- Extracting information surrounding the comments to each answers for a question
+- Combining all the question, answers, and comment information into one data frame
+- Reading a page of results from search query
+  - Extracting the questions based on that page
+- Extracting the URL for next page of search query
+- Reading a question page containing 50 questions, and extracting the question, answers, and comments info
+
+In each "section", I provide the necessary functions I used in order to complete the task, and a brief description of my thought process. I provided more comments in the R script containing the functions if anything is unclear. I wrote a lot of functions so I know that it may be hard to digest all at once.
+
+With that said, lets start from step 1.
+
+
+### Dependencies/Useragent/Source
+
+```{r, warning=FALSE}
+library(RCurl)
+library(XML)
+library(httr)
+library(rvest)
+source("ghFuns.R")
+
+# Need to specify user
+useragent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36"
+# Set WD
+setwd("~/Documents/UCD Classes/22-23/Spring Q23 Classes/STA 141B/HW4")
+# options(error = recover)
+```
+
+The first step was to load the proper packages. Because this is web scraping, I need to make HTTP GET requests from the website. In addition, I needed to include the required HTTP Request Headers, which in this case was the Accept, Cookies, and User Agent. The code for the cookies is not shown however I did include it in my function, and I extracted it by simply doing readLines() from a txt file that I saved to my specific directory. After I had all the information, I put it into getForm().
+
+Now, I will dive in to the main functions that I needed to create in the order of how they were listed on the assignment.
+ 
+\newpage
+
+## 1.) Read questions from a page
+
+**Read_Page() description:**
+
+As I stated above for reading a page, I needed to grab the necessary request headers to put into getForm(). Now that I have the headers, the last thing I needed to have was a specific url. Because we are trying to read questions from a page, the url needed for an input was the url based on the search query. Now, if I plug everything into getForm() with the proper parameters in the correct location, I will get the raw output of the HTML file. However, this is not the format we want it in as we want to perform XPath operations later on to extract specific nodes, therefore we need to parse the file into the actual HTML source code. I also included rawToChar before parsing into HTML because I ran into an error with unicode, as mentioned in the Piazza Post @367.
+
+```{r page_results, warning=FALSE,message=FALSE}
+# Read a page of results based on query and parse into HTML structure
+page = read_page("https://stackoverflow.com/questions/tagged/r?tab=newest&page=1&pagesize=50")
+```
+
+The example above reads the first search query page of results on the SO website. Now that I have the parsed HTML of the entire page, the next step was to extract the 50 questions on the page. To do this, I created the function: page_links()
+
+
+**Page_links description:**
+
+After using the read_page() with the specified url, we want to find the specific paths associated with each of the 50 questions. From the webpage, it is pretty simple to see that we could find a question page by finding the path and pasting it after the base SO url. For example, if a question in the HTML file had an @href = /questions/1114699/creating-an-adjacency-list-from-a-data-frame, we would get the question page by adding that path to https://stackoverflow.com. For page_links(), I was able to find that exact @href path for each question, and pasted the paths with the base url and returned the urls. Here is the output of the first ten question urls for the first page of SO.
+
+```{r page_questions, warning=FALSE,message=FALSE}
+# Read all (50) questions from a specific page, uses read_page function
+head(page_links("https://stackoverflow.com/questions/tagged/r?tab=newest&page=1&pagesize=50"),10)
+```
+
+This works for every page on the SO website. Lets try another random page
+
+```{r, warning=FALSE, message=FALSE}
+head(page_links("https://stackoverflow.com/questions/tagged/r?tab=newest&page=9814&pagesize=50"),10)
+```
+
+These functions are able to properly read in a search result page, and return the links to the 50 questions on that page.
+
+#
+
+## 2.) Find URL for next page of Search Query Results
+
+Lets say our search query was [r], which took us to the initial page of "https://stackoverflow.com/questions/tagged/r". Now, I want the second page of results. One way to do this manually is to click the next button, or 2 button on the bottom of the page. This would take us to a new link, "https://stackoverflow.com/questions/tagged/r?tab=newest&page=2&pagesize=50".
+
+To do this programatically, I built a nextURL() function.
+
+
+**NextURL() description:**
+
+This function takes in a search query page link. In the example above, it would be the tagged/r. Based on this page, I would first parse it into HTML (using read_page() from above) for using Xpath. To get the next page url, we could press on the 'next' button, or the '2' button. For general purposes, I want to simulate the click of the next button, therefore I extracted the path for 'next' within the parsed HTML for the input url. With that said, I was able to find the path "//a[@rel = 'next']", which finds the specific node that contains the url information needed for the next page. To get the next page, I used another function, getNextURL(), within MY nextURL() function, and found the @href of the node that has the path: "//a[@rel = 'next']" RELATIVE TO THAT OF THE INPUT URL, using getRelativeURL(). I also checked that if there was no @rel = 'next' path in the parsed HTML of the input url, the function would return blank, meaning that a next button DNE. Finally, I plugged in my parsed HTML into the getNextURL() within my nextURL function, which retrieved the relative URL. If the description is hard to follow, please refer to my function.
+
+
+```{r url_next_pg, warning=FALSE,message=FALSE}
+# Find URL for next page, uses read_page and getNextURL functions
+nextURL("https://stackoverflow.com/questions/tagged/r")
+```
+
+The function returns exactly what was asked for. The input url was the first search query page link, and it returned the second page link of the search query.
+
+\newpage
+
+## 3.) Reading a Question Page
+
+For reading a question page, I extracted the question HEADER (not text), the associated answers, and the comments. To do this, all I needed to do was to find the correct Xpath and add everything into a list of lists. The first list represents the question, second -> answer, and third -> comments given a specific question url.
+
+```{r question_pg, warning=FALSE,message=FALSE}
+# Reading a question page, extracting question, answer, and comments
+pg_info = read_question_pg("https://stackoverflow.com/questions/76366992/how-to-line-up-ui-elements-using-style-argument-in-shiny-app-that-uses-bslib-5")
+head(pg_info)
+```
+
+From the given question above, I went in manually to check the contents, and from the output we can see that it extracted all the correct information.
+
+\newpage
+
+## 4.) Processing 4 Pages of Interest
+
+This section contains all the functions that have not been listed yet in this report.
+I will explain how they all come together.
+
+**Questions**
+
+Related Functions: Questions() and Question_info()
+
+**Descriptions**
+
+Essentially, this function returns all of the information related to a question. This includes: 
+
+- Votes, views, text, tags, date, user, user badges, etc.
+
+The **questions() function** only takes in one argument: the url of the page containing all 50 questions. From this url, I read the HTML file using my read_page(), extracted the question urls using my page_links(), and introduced a new function, **parsed_questions()**. Basically, this function just parses all of the question links into HTML for further Xpath evaluation. The function also checks for any potential "blank" questions (length == 0), and returns a character() if so. It also stores the parsed HTMLs for the questions in a list, for easier analysis for Xpath. 
+
+To extract the content, I used another function **question_info()**, which takes in 3 arguments, and is used to extract all the specific feature given the Xpath and put it into a list. It also checks whether the path exists in a certain parsed HTML question page, and it will return char(0) if the path was not found (length = 0).
+
+For presenting the questions, I put everything into a data frame. Later when I get to answers and comments, I explain why I did not put it into dfs and instead into a list of lists of lists, and eventually merged them back into the question data frame. Here is a sample of the output using my questions() function:
+
+```{r, warning=FALSE, message=FALSE}
+question = questions("https://stackoverflow.com/questions/tagged/r")
+lapply(question[1:11], function(x) head(x,5))
+```
+
+**Verification**
+
+I manually compared the results to the SO webpage, and everything seemed to match. A way to verify that the results were read in correctly is to look at the question post dates. The dates/time should be in order of most recent to older, as the first posts should have more recent times. 
+
+```{r question_times}
+head(question$`Question Date Posted`,10)
+```
+
+Since I extracted the very first page of search query results, it is not surprising that we see that the post creation times are pretty recent.
+
+\newpage
+
+**Answers**
+
+Related Functions: Answers() and Answer_info()
+
+**Descriptions**
+
+These functions have similar procedures to the question functions. The main difference is that for every question, there may be multiple answers. Due to this, if there were hypothetically 10 answers for a single question, it would not make sense to put all 10 of those answers in a single cell in that data frame. It would be difficult to extract the information and the data would be messy. Instead, I made the functions return a list of lists of lists, which provides greater flexibility in retrieving answers. 
+
+To make the concept of nested lists more transparent, I have a list containing a lists of all the answer information:
+
+- Text
+- User
+- Reputation/Badges
+
+So those (4) features I listed above are all of type list. They are all contained within a bigger list. Within each feature that is a list, there is one more layer of a list that may contain multiple counts for that feature. For extracting each feature, I found the corresponding Xpaths.
+
+**Answer_info()** serves a similar function question_info(), the only difference being that I added an additional lapply() to put multiple answers for a specific question into lists.
+
+```{r, warning=FALSE,message=FALSE}
+answer = answers("https://stackoverflow.com/questions/tagged/r") 
+lapply(answer[1:5], function(x) head(x,5))
+```
+
+**Verification**
+
+The answer dates should also be in order of most recent to older. In addition, it would make sense if the answers came AFTER the question, assuming it was not an edited question. Lets check this
+
+```{r}
+# Questions
+head(question$`Question Date Posted`,10)
+# Answers
+head(answer$`Ans Post Date`,10)
+```
+
+From the results above, the first row represents the time for the questions, while the list of lists represents answer times. We see that for the answers, they came more recently or equal to than the question, meaning that the question did indeed come beforehand, which makes sense. 
+
+\newpage
+
+**Comments**
+
+Related functions: Comments(), Comment_info(), Parsed_Comments()
+
+**Descriptions**
+
+These functions are exactly like the answer functions; they take in a list of list of lists, as there may be multiple comments for a particular answer. However, I had to do one extra step for comments, as some comments were hidden under a link saying "Show xyz more comments". 
+
+**Here's an example: https://stackoverflow.com/questions/2851327/combine-a-list-of-data-frames-into-one-data-frame-by-row **
+
+To fetch the comments that were hidden under the link, instead of looking at the node that led to "comment-post" (which gave me all the comments on the page besides the hidden comments under the link), I extracted the path where the node <a> contained "js-show-link comments-link dno". From this, I found that every single question page has this exact node, even if there was no comment, or more surprisingly NO ANSWER. This means that every question/answer on each individual page had a separate page for it comments, and it either contained information or just blank.
+
+Now that I have that down, I had to figure out how to extract the urls for the separate comment pages in order to actually extract all the comments. By playing around with the developer tools and refreshing the network tab, I found that after I clicked on the "Show xyz more comments" link, a new request popped up in the tab, and took me to this page: **https://stackoverflow.com/posts/2851434/comments?_=1685858830012.** We can see that this new url contains all the comments associated with that answer, which gives me the result I want.
+
+The last thing I had to do was extract the proper url. To do this, all I had to do was find the parent node of the <a> node that contained the "js-show-link" mentioned above, as that contained the unique ID I needed for the post. I extracted this by using xmlGetAttr() on the ID of the parent node, and was able to get the number. Finally, I simply pasted the proper url: baseurl/posts + ID + comments, and made a list of lists of lists.
+
+```{r, warning=FALSE,message=FALSE}
+comment = comments("https://stackoverflow.com/questions/tagged/r")
+lapply(comment[1:3], function(x) head(x,5))
+```
+
+
+**Pages of Interest**
+
+Related functions: Pages_search_result(), Last_page, Next_page
+
+**Description:**
+
+For processing the pages of interest, I wrote a function called pages_search_result that combines all the questions, answers, and comments information given a specific search query page of results. I combined the parts above in a data frame, and I had to use lapply(...,I) in order to add the answers and comments, as they were lists. The "I" basically says that we want to keep the lists as they are in their current form when appending it to the data frame, which makes it a lot easier to add in the lists properly.
+
+I plan to arrange the 4 pages in the following format: 
+
+- I'm going to grab the second and third page and all of the results, and display some of the output
+- After, I'm going to grab the first and last page, and do some verification to ensure the data seems sensible and was read in fine
+
+### Second Page
+
+```{r, warning=FALSE, message=FALSE}
+second_pg = pages_search_result(nextURL("https://stackoverflow.com/questions/tagged/r"))
+lapply(second_pg[1:19], function(x) head(x,3))
+```
+
+### Third Page
+
+```{r, warning=FALSE,message=FALSE}
+third_pg = pages_search_result(nextURL(nextURL("https://stackoverflow.com/questions/tagged/r")))
+lapply(third_pg[1:19], function(x) head(x,3))
+```
+
+\newpage
+
+### First Page
+
+```{r pages_of_interest, warning=FALSE,message=FALSE}
+first_pg = pages_search_result("https://stackoverflow.com/questions/tagged/r")
+lapply(first_pg[1:19], function(x) head(x,3))
+```
+
+### Last Page
+
+The last page was very cumbersome to retrieve, as the page url was not consistent from time to time. For retrieving the last page, I assume that we started from page 3 of our processed results, and used the url corresponding to page 3 as an input.
+
+My process was that I started from page 3, and extracted the largest page value from that page. The largest value was inconsistent at times (not the same url), so it gave me different last page urls at time. To check whether the page was truly the last, I was able to simulate a click of the "next" button and checked if a page (lets say page 9816 generated from the third page url) had @rel = next. If a page had that, I would go to the next page and keep doing the same process until I found a page with "no questions" on it, and if that was the case I would return the previous url before the blank page. 
+
+```{r, warning=FALSE,message=FALSE}
+# Third pg
+third = nextURL(nextURL("https://stackoverflow.com/questions/tagged/r"))
+last = last_page(third)
+last_pg = pages_search_result(last)
+lapply(last_pg[1:19], function(x) head(x,3))
+```
+
+
+**Verification of Results Using First and Last Page**
+
+I want to compare the distributions of views and votes for the first and last pages. We should see the distribution of views and votes for the first page to be heavily inclined towards smaller values, whereas for the last page it should be higher.
+
+**Plots of Views Distributions**
+```{r}
+# First page
+plot(as.numeric(gsub("[[:alpha:]]+","",gsub("k","000",first_pg$Question.Views))), xlab = "Question #", ylab = "Views", main = "Views for first 50 questions")
+
+# Last Page
+plot(as.numeric(gsub("[[:alpha:]]+","",gsub("k","000",last_pg$Question.Views))), xlab = "Question #", ylab = "Views", main = "Views for last 50 questions")
+```
+
+Clearly, we see that there are many more views (in the ten thousands) in the last 50 questions compared to the first 50. This is sensible, as the last pages have been intact since 2009, while the new pages are the most recent.
+
+I also plotted the distribution for votes:
+
+**Plots of Votes Distributions**
+```{r}
+plot(as.numeric(first_pg$Question.Votes), xlab = "Question #", ylab = "Votes", main = "Votes for first 50 questions")
+plot(as.numeric(last_pg$Question.Votes), xlab = "Question #", ylab = "Votes", main = "Votes for last 50 questions")
+```
+
+We also see many more votes for the last 50 questions compared to the first 50.
+
+
+**Comparing Dates**
+
+Another important thing to verify is if the creation dates for the questions on the last 50 pages are all created before the first 50 (excluding edited times).
+
+```{r}
+first_pg$Question.Date.Posted
+```
+
+```{r}
+last_pg$Question.Date.Posted
+```
+
+The dates seem fine.

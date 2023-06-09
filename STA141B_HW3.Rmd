@@ -1,0 +1,850 @@
+---
+title: "STA 141B_HW3"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+# SQL STATS EXCHANGE
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning=FALSE, message=FALSE}
+library(RSQLite)
+library(DBI)
+library(lubridate)
+library(sqldf)
+library(dplyr)
+```
+
+# CONNECT TO POSTTYPEID MAP
+
+
+```{r}
+# Set working directory
+setwd("~/Documents/UCD Classes/22-23/Spring Q23 Classes/STA 141B/HW3/HW3_Stuff/Schema:Descriptions")
+# Connect to Database
+db = dbConnect(SQLite(), "stats.stackexchange.db")
+```
+
+```{r}
+# Get tables
+dbListTables(db)
+```
+
+```{r, include=FALSE}
+# List fields
+lapply(dbListTables(db), function(tbl) dbListFields(db, tbl))
+```
+
+
+
+## Questions
+
+**1. How many users are there?**
+
+```{r}
+dbGetQuery(db, "SELECT COUNT(DISTINCT Id) as USERS FROM Users")
+```
+
+A user can be interpreted in various ways. I interpreted as the number of unique user IDs, so I used COUNT DISTINCT ID to query the number of users. I found 321677 different users.
+
+Tables Used: Users
+
+
+
+**2. How many users joined since 2020? (Hint: Convert the CreationDate to a year.)**
+
+```{r}
+dbGetQuery(db, "SELECT COUNT(*) AS Users_2020, strftime('%Y-%m-%d %H:%M:%f', CreationDate) AS CreationDate,
+           strftime('%Y', CreationDate) AS Year, Id
+           FROM Users WHERE
+           Year >= '2020'")
+```
+
+I used strftime to extract the year, and found that 100796 users joined since 2020.
+
+Tables Used: Users
+
+
+
+**3. How many users joined each year? Describe this with a plot, commenting on any anomalies.**
+
+I counted the total tuples in Users and grouped the tuples by Year.
+
+```{r}
+user_per_year = dbGetQuery(db, "SELECT COUNT(*) AS Users_2020, strftime('%Y', CreationDate) AS Year 
+                           FROM Users
+                           GROUP BY Year")
+```
+
+```{r}
+user_per_year
+
+# Double check all users are groups = 321677
+sum(user_per_year$Users_2020)
+```
+
+I grouped the users by year and counted the frequency of users, and then double checked if the original number of users was the same after the data manipulation. 
+
+```{r}
+plot(user_per_year$Year,user_per_year$Users_2020, xlab = "Year", ylab = "Number of Joined Users", main = "New Users per Year", type = 'b') 
+```
+
+From the plot above, we observe that there was a huge drop in users that joined between 2022-2023.
+
+Tables Used: Users
+
+
+
+**4. How many different types of posts are there in the Posts table? Get the description of the types from the PostTypeIdMap table. In other words, create a table with the description of each post type and the number of posts of that type, and arrange it from most to least occurrences.**
+
+```{r, echo=FALSE,include=FALSE}
+# Use for later
+posts = dbGetQuery(db, "SELECT * FROM Posts")
+```
+
+I found the different types of posts in the Posts table by querying the DISTINCT PostTypeIds. In the POSTS table, I found 7 different types of posts. However, I noticed that the schema showed that there are actually 8 different types of posts.
+
+```{r}
+# Different types of Posts
+dbGetQuery(db, "SELECT DISTINCT PostTypeId FROM Posts")
+```
+
+Using the PostTypeIdMap table, I found 8 distinct descriptions of the post types.
+
+```{r}
+# Different types of descriptions 
+dbGetQuery(db, "SELECT DISTINCT value FROM PostTypeIdMap")
+```
+
+The count (8) in the PostTypeIdMap is not congruent to the count of PostTypeIds (7) in the Posts table. Notice how there is no PostTypeId = 8 in the Posts table. From this, I reasoned that the Posts table did not contain any posts with PostTypeId = 8 and the corresponding description of "Privilege wiki".
+
+```{r}
+dbGetQuery(db,"SELECT * FROM Posts
+           WHERE PostTypeId = 8")
+```
+
+We see that this is true. To get the number of posts for each description, I used COUNT to count the total number of rows and GROUP BY PostTypeId to group the number of counts with its corresponding PostTypeId.
+
+```{r}
+# Number of posts for description
+dbGetQuery(db, "SELECT COUNT(*) AS Posts, PostTypeId, value FROM Posts
+           JOIN PostTypeIdMap
+           ON Posts.PostTypeId = PostTypeIdMap.id GROUP BY PostTypeId ORDER BY Posts DESC")
+```
+
+Tables Used: Posts, PostTypeIdMap
+
+
+
+**5. How many posted questions are there?**
+
+```{r}
+dbGetQuery(db, "SELECT COUNT(PostTypeId) AS Questions FROM Posts 
+           JOIN PostTypeIdMap
+           ON Posts.PostTypeId = PostTypeIdMap.Id
+           WHERE PostTypeIdMap.Id = 1")
+```
+
+We want to double check that the PostTypeId = 1 in Posts is actually a question. To do this, I joined PostTypeIdMap to Posts by the corresponding Id link, and then found the answer by finding the joined tuples that had Id = 1 for PostTypeIdMap. I found 204370 counts of type 'question'. Another way to confirm this is by using the last question: there are also 204370 counts of questions.
+
+Tables Used: Posts, PostTypeIdMap
+
+
+
+**6. What are the top 50 most common tags on questions? For each of the top 50 tags on questions, how many questions are there for each tag.**
+
+```{r}
+dbGetQuery(db, "SELECT Tag, COUNT(*) AS Tag_Count
+           FROM TagPosts 
+           GROUP BY Tag 
+           ORDER BY Tag_Count DESC LIMIT 5")
+```
+
+I found the tags first by using the TagPosts table. The table includes the question ID and its corresponding tag(names). In order to find the most common tags, all I needed to do was to create a new column for counting the total number of tags, group by the distinct tags, and find which tags had the greatest counts. For finding questions for each tag, it is given that each tag is associated with a unique question ID, so the number of questions is just equal to the tag count.
+
+Tables Used: TagPosts
+
+
+
+**7. How many tags are in most questions?**
+
+```{r}
+number_tags = dbGetQuery(db, "SELECT COUNT(Tag) AS Number_Tags,Id as Question,Tag AS TagName FROM TagPosts
+           GROUP BY Id
+           ORDER BY Number_Tags DESC")
+
+head(number_tags)
+```
+
+What is the range of tag counts for all the individual questions? I used COUNT(Tag) and ID and then grouped by ID to get the tag counts for every individual ID/question. To find the range of tag counts, I used the table function and found that there are only 1-5 tags associated with every question.
+
+```{r}
+table(number_tags$Number_Tags)
+max(table(number_tags$Number_Tags))
+```
+
+Lastly, to find the most frequent number of tags in most questions, I used table() to count the frequencies of number of tags and chose the one with the greatest count by max(). I found that in most questions (59782), there are 3 tags.
+
+Tables Used: TagPosts
+
+
+
+**8.) How many answers are there?**
+
+```{r}
+dbGetQuery(db, "SELECT COUNT(*) AS Answers FROM Posts
+           JOIN PostTypeIdMap
+           ON Posts.PostTypeId = PostTypeIdMap.Id
+           WHERE PostTypeIdMap.Id = 2") 
+```
+
+This is similar to question 5. I did the same thing but set the PostTypeIdMap.Id = 2, which corresponds to Answer.
+I found 197928 answers.
+
+Tables Used: Posts, PostTypeIdMap
+
+
+
+**9.) What’s the most recent question (by date-time) in the Posts table?**
+
+```{r}
+dbGetQuery(db, "SELECT strftime('%Y-%m-%d %H:%M:%f', CreationDate) AS CreationDate, Title, Id FROM Posts 
+           ORDER BY CreationDate DESC
+           LIMIT 1")
+```
+
+I found the most recent question by using the CreationDate column in Posts, which relates to the date a question was created. I ordered the CreationDate in descending order, and found that the most recent question in the Posts table was "Are there any papers or methods that combine mcmc and variational inference".
+
+Tables Used: Posts
+
+
+**• Find it on the stats.exchange.com Web site and provide the URL.**
+
+https://stats.stackexchange.com/questions/608405/are-there-any-papers-or-methods-that-combine-mcmc-and-variational-inference
+
+I found this by simply using the base url: https://stats.stackexchange.com and then provided the PostId to find the question. This actually leads to a 404 and said that "This question was voluntarily removed by its author".
+
+
+**• How would we map a question in the Posts table to the corresponding SO URL?**
+
+To map a question in the Posts table to the StackOverflow URL we would just put in the QuestionId into the base URL followed by the path questions/.
+
+For example, if we wanted to map the question "Eliciting priors from experts", which corresponds to a PostId of 1, we would simply do:
+
+https://stats.stackexchange.com/questions/1
+
+
+
+**10.) For the 10 users who posted the most questions:**
+
+• How many questions did they post? • What are the users’ names?
+
+• When did they join SO?
+
+• What is their Reputation?
+
+• What country do they have in their profile?
+
+Note: Instead of answering the sub-questions one by one, I kept adding query commands to the one chunk of code
+below. All the answers to the questions can be found in the data frame below.
+
+```{r}
+top_10 = dbGetQuery(db, "SELECT COUNT(PostTypeId) AS Questions, Users.Id, DisplayName, Users.CreationDate AS Joined_Date, Users.Reputation, Users.Location AS Country
+FROM Posts
+           JOIN Users
+           ON Posts.OwnerUserId = Users.Id
+           WHERE PostTypeId = 1
+           GROUP BY Users.Id
+           ORDER BY Questions DESC
+           LIMIT 10")
+
+top_10
+```
+
+Since the User.Id and PostTypeId are in different tables, I joined the User and Posts table and matched the corresponding links. This gave back a table that included the User.Id if it was in Post.OwnerUserId, and ensured that the User who asked the question matched the correct question post. After, I counted the number of posts where PostTypeId = 1 for a given User.Id and grouped by User.Id, which gave me the question counts per user. The other sub-questions were relatively straightforward.
+
+Tables Used: Posts, Users
+
+
+
+**11.) Following from the previous questions, for the 10 users who posted the most questions, how many gold, silver and bronze badges does each of these 10 individuals have?**
+
+```{r}
+badges = dbGetQuery(db, "SELECT Badges.Id,UserId,Class,value,Name FROM Badges
+                    JOIN BadgeClassMap
+                    ON Badges.Class = BadgeClassMap.id")
+head(badges,3)
+```
+
+My first idea was to join the Badges and Top_10_Users table (from Question 10) to get the Usernames corresponding to the badges. Before I did that, I created a new d.f named badges that classified the classes of badges (1,2,3) as Gold,Silver,and Bronze, respectively. After this, I constructed the query below
+
+Tables Used: Badges, BadgeClassMap
+
+```{r}
+sqldf("SELECT DisplayName, top_10.Id AS User_Id, value, COUNT(value) AS Count
+FROM top_10
+      JOIN badges
+      ON top_10.Id = badges.UserId
+      GROUP BY top_10.Id, value
+      ORDER BY DisplayName")
+```
+
+I joined the Top_10_Users with the Badges on their linked Ids. To find the distribution of Gold,Silver,and Bronze badges for the 10 unique users, I counted the total number of badges, and grouped by the User.Id and Badge Type. This returns a table that includes the 10 users with their respective badge counts.
+
+Tables Used: Badges, Top_10
+
+
+
+**12.) For each of the following terms, how many questions contain that term: Regression, ANOVA, Data Mining, Machine Learning, Deep Learning, Neural Network.**
+
+
+```{r}
+dbGetQuery(db, "SELECT
+  SUM(Title LIKE '%Regression%') AS Regression,
+  SUM(Title LIKE '%ANOVA%') AS ANOVA,
+  SUM(Title LIKE '%Data Mining%') AS Data_Mining,
+  SUM(Title LIKE '%Machine Learning%') AS Machine_Learning,
+  SUM(Title LIKE '%Deep Learning%') AS Deep_Learning,
+  SUM(Title LIKE '%Neural Network%') AS Neural_Network
+FROM Posts")
+```
+
+I collected the sum of titles/questions that contained the exact specified term.
+
+Tables Used: Posts
+
+
+
+**13.) Using the Posts and PostLinks tables, how many questions gave rise to a ”related” or ”duplicate” question?**
+
+According to the schema, "related" or "duplicated" questions are classified as LinkType.Id = 1 and 3, respectively. With this information, I found the answer by joining the Posts and PostLinks table by Id, made sure that the PostType was a question, and grouped by LinkType.
+
+```{r}
+dbGetQuery(db, "SELECT LinkTypeId, COUNT(*) AS Count
+FROM Posts
+           JOIN PostLinks
+           ON Posts.Id = PostLinks.PostId
+           WHERE PostTypeId = 1
+           GROUP BY LinkTypeId")
+```
+
+Tables Used: Posts, PostLinks
+
+
+**• And how many responses did these questions get?**
+
+```{r}
+dbGetQuery(db, "SELECT DISTINCT Posts.Id,Posts.Title,LinkTypeId,AnswerCount+CommentCount AS Responses
+FROM Posts
+           JOIN PostLinks
+           ON Posts.Id = PostLinks.PostId
+           WHERE PostTypeId = 1
+           ORDER BY Responses DESC
+           LIMIT 5")
+```
+
+I added up the answer and comment counts to measure the response count for a question. I grouped the tuples by responses, from highest to lowest.
+
+Tables Used: Posts, PostLinks
+
+
+**• How experienced were the users posting these **questions**.**
+
+```{r}
+dbGetQuery(db, "SELECT Posts.Id,Posts.Title,Users.Reputation,Users.Upvotes
+FROM Posts
+           JOIN PostLinks
+           ON Posts.Id = PostLinks.PostId
+           JOIN Users
+           ON Posts.OwnerUserId = Users.Id
+           WHERE PostTypeId = 1
+           ORDER BY Reputation DESC
+           LIMIT 5")
+```
+
+I measured experience through User Reputation and Upvotes. The values above show the most experienced users that hold the highest reputation.
+
+Tables Used: Posts, PostLinks, Users
+
+
+
+**14.) What is the date range for the questions and answers in this database?**
+
+```{r}
+# Dates for Questions
+dbGetQuery(
+  db,
+  "SELECT PostTypeId, MIN(strftime('%Y-%m-%d %H:%M:%f', CreationDate)) AS Start,
+                       MAX(strftime('%Y-%m-%d %H:%M:%f', CreationDate)) AS End
+          FROM Posts
+            GROUP BY PostTypeId
+  LIMIT 2"
+)
+```
+
+I assume that date ranges means the range of the first and last occurrence of a question or answer in the database. I first used strftime on CreationDate, then used the MIN and MAX functions to get the range. Then, I grouped by PostTypeId to get the date ranges for all the types, and limited it to the first 2 tuples, as they corresponded to PostTypeId = 1,2, which represent question and answer.
+
+Tables Used: Posts
+
+
+
+**15.) What question has the most comments associated with it?**
+
+```{r}
+dbGetQuery(db, "SELECT Title, COUNT(*) AS Comment FROM Comments
+           JOIN Posts
+           ON Comments.PostId = Posts.Id
+           WHERE PostTypeId = 1
+           GROUP BY Title 
+           ORDER BY Comment DESC
+           LIMIT 1")
+```
+
+First I wanted to join the Comments and Posts table to get the Question Title and comment count. I counted the number of tuples in comment and grouped by Title/question to get the comment counts per question. To get the questions with the most comments, I first set PostTypeId = 1 (question), and then ordered the count by descending and limited the display to 1 tuple. 
+
+Tables Used: Comments, Posts
+
+
+
+**• How many answers are there for this question?**
+
+```{r}
+dbGetQuery(db, "SELECT AnswerCount FROM Posts
+           WHERE Title = 'Is ridge regression useless in high dimensions ($n \\ll p$)? How can OLS fail to overfit?'")
+```
+
+Tables Used: Posts
+
+
+
+**16.) How many comments are there across all posts?**
+
+```{r}
+dbGetQuery(db, "SELECT SUM(CommentCount) AS Comments FROM Posts")
+```
+
+I used SUM(CommentCount) (instead of COUNT because CommentCount contains values > 1) to compute the total amount of comments for all PostTypeIds. 
+
+
+**• How many posts have a comment?**
+
+```{r}
+dbGetQuery(db, "SELECT COUNT(DISTINCT Id) AS Post_With_Comment FROM Posts
+           WHERE CommentCount > 0")
+```
+
+
+**• What is the distribution of comments per question?**
+
+First, I wanted to find the comment counts for every unique question. I verified that all of the Titles were questions by setting PostTypeId = 1
+
+```{r}
+library(ggplot2)
+
+distribution_coques = dbGetQuery(db, "SELECT DISTINCT Title,Posts.Id,CommentCount,Posts.PostTypeId FROM Comments
+           JOIN Posts ON
+           Posts.Id = Comments.PostId
+           WHERE Title is NOT NULL AND
+           Title <> '' AND
+           PostTypeId = 1
+           ORDER BY Posts.Id")
+
+# Look at CommentCount per Question
+head(distribution_coques)
+```
+
+Verification for all Posts having PostTypeId = 1
+
+```{r}
+# Checking if all are questions == 1
+unique(distribution_coques$PostTypeId)
+```
+
+```{r}
+# How many Questions have comments
+nrow(distribution_coques)
+```
+
+To display the distribution of comments per question, I used a table:
+
+```{r}
+# How many comments in number of questions
+table(distribution_coques$CommentCount)
+```
+
+```{r}
+# Double check counts in table = # of comments for questions
+sum(table(distribution_coques$CommentCount))
+```
+
+I also graphed the result for more clarity on the distribution
+
+```{r}
+# Graphically
+plot(table(distribution_coques$CommentCount), xlab = "Number of Comments", ylab = "Frequency",
+     main = "Distribution of Count of Comments Per Question")
+```
+
+From the histogram above, it is clearly right skewed. Most of the data lies on the left side, which indicates that
+there was a greater frequency of number of comments in a smaller amount of comments.
+
+Tables Used: Comments, Posts
+
+
+
+**17.) Is there any relationship between the number of tags on a question, the length of a question, and the number of responses (posts and comments)?**
+
+```{r}
+relationship = dbGetQuery(db, "SELECT COUNT(Tag) AS Tags, LENGTH(Title) AS Length, AnswerCount, CommentCount, (AnswerCount + CommentCount) AS Responses
+FROM Posts
+           JOIN TagPosts
+           ON Posts.Id = TagPosts.Id
+           GROUP BY TagPosts.Id
+           ORDER BY Tags,Length")
+
+# As Factors
+relationship$Tags = as.factor(relationship$Tags)
+```
+
+I imagine that for this question, the independent variable is number of tags, and the dependent variables being the length and number of responses. To show the relationship(s), I needed to extract the columns for number of tags, length, and responses on a question. In addition, because Tags is the independent variable, I changed their class to Factors for plotting purposes.
+
+Tables Used: Posts, TagPosts
+
+
+To test the relationship, I plotted the graphs with the appropriate axis.
+
+```{r}
+# Tags vs Length
+ggplot(relationship, aes(x = Tags, y = Length)) +
+  geom_violin(trim = FALSE) +
+  geom_boxplot() 
+```
+
+There seems to be no relationship between the number of tags and length of a question (the boxplots and the median among each tag are almost identical).
+
+```{r}
+# Tags vs All Responses
+ggplot(relationship, aes(x = Tags, y = Responses))+
+  geom_violin(trim = FALSE) +
+  geom_boxplot()
+```
+
+There does not seem to be much of a correlation between tag counts and the number of responses for a question either. We see that tags 2 and 3, there are outliers, however in general most of the data points for all tags have the same distribution. 
+
+
+
+**18.) Do the people who vote tend to have badges?**
+
+```{r}
+vote_badges = dbGetQuery(db, "SELECT Users.Id, DisplayName, UpVotes, DownVotes, UpVotes + DownVotes AS Total_Votes, COUNT(Class) AS Badges FROM Badges
+           LEFT JOIN Users
+           ON Users.Id = Badges.UserId
+           JOIN BadgeClassMap
+           ON Badges.Class = BadgeClassMap.id
+           GROUP BY Users.Id")
+```
+
+Plot to display relationship below.
+
+```{r}
+plot(vote_badges$Total_Votes, vote_badges$Badges, xlim = c(0,20000), 
+     xlab = "Votes", ylab = "Badge Count", main = "Badge Count vs Votes")
+```
+
+There is somewhat of a correlation. Kinda....
+
+Tables Used: Badges, Users, BadgeClassMap
+
+
+
+**20.) How many posts have multiple different people who edit it?**
+
+```{r}
+posts_multiple_edits = dbGetQuery(db, "SELECT PostHistoryTypeId,PostId,COUNT(DISTINCT UserId) AS Multiple_Editors,Text,Comment FROM PostHistory
+           WHERE PostHistoryTypeId IN ('4','5','6')
+           GROUP BY PostId
+           HAVING Multiple_Editors > 1")
+
+length(posts_multiple_edits$PostId)
+```
+
+I used the PostHistory table and extracted the unique Ids that corresponded to any form of editing. For example in the table, PostHistoryTypeId 4 had the value of "Edit Title." From this logic, I extracted all the IDs that were related to a type of edit and extracted it. I grouped by the PostId and found the values that had multiple editors. In total, I found 54293 posts with multiple editors.
+
+Tables Used: PostHistory
+
+
+
+## Required Questions
+
+**21.) Compute the table that contains**
+• the question,
+• the name of the user who posted it,
+• when that user joined,
+• their location
+• the date the question was first posted,
+• the accepted answer,
+• when the accepted answer was posted
+• the name of the user who provided the accepted answer.
+
+```{r}
+users = dbGetQuery(db,"SELECT * FROM Users")
+
+dbGetQuery(db, "SELECT Q.Title,U.DisplayName,U.CreationDate,U.Location,Q.CreationDate,A.Body,A.CreationDate,Provider.DisplayName AS Answer_User
+FROM Posts AS A, Posts AS Q, Users AS U, Users AS Provider
+           WHERE A.Id = Q.AcceptedAnswerId AND
+           U.Id = Q.OwnerUserId AND
+           Provider.Id = A.OwnerUserId AND
+           Q.PostTypeId = 1
+           LIMIT 10")
+```
+
+First: I needed the Users and Posts tables.
+
+To extract the values, I mapped a Post.Id = A.AcceptedAnswerId, User.Id = OwnerUserId, and another User Id to the posts OwnerUserId.
+
+First map: We want to map a Post to its corresponding accepted answer in order to retrieve the accepted answer column.
+
+Second map: We want to map a User Id to the same Post OwnerUserId above to get the user that posted the question. From this, we can extract more information about the user, such as the username, date they joined, and their location.
+
+Third map: Finally, we want to map a new User Id to the A.OwnerUserId in order to extract the CreationDate and username of the answer.
+
+
+
+**22.) Determine the users that have only posted questions and never answered a question? (Compute the table containing the number of questions, number of answers and the user’s login name for this group.) How many are there?**
+
+```{r}
+dbGetQuery(db, "SELECT OwnerUserId,Users.DisplayName,SUM(PostTypeId = 1) AS Questions,SUM(PostTypeId = 2) AS Answers FROM Posts
+           JOIN Users
+           ON Posts.OwnerUserId = Users.Id
+           GROUP BY OwnerUserId
+           HAVING Questions > 0 AND
+           Answers = 0
+           ORDER BY Questions DESC
+           LIMIT 5")
+```
+
+Thank you to Professor Duncan for explaining this to me. Because we are looking for user and posted questions and answers, I joined the Users and Posts table. I used the SUM() function to evaluate whether there existed PostTypeId = 1 or 2, which correspond to question or answer, for a particular user. To see the counts of question and answers per user, I grouped by user ID. Finally, I created a condition where the user must have a question count > 0 and answer count = 0 to find which users posted a question and never answered. In total, there were 76,410 of these unique users (I only showed 5 above though).
+
+Tables Used: Users, Posts
+
+
+
+**23.) Compute the table with information for the 75 users with the most accepted answers. This table should include**
+• the user’s display name,
+• creation date,
+• location,
+• the number of badges they have won,
+– the names of the badges (as a single string)
+• the dates of the earliest and most recent accepted answer (as two fields)
+– the (unique) tags for all the questions for which they had the accepted answer (as a single string)
+
+
+I split this section into two parts: In the part below, I computed the dsername, user creation date, and user location. For this, I self-joined the posts table and used the users table. 
+
+Thought Process: I want to find the users that had the most accepted answers. To do this, I need the users and posts table. I first joined where User Id = OwnerUserId. I did this because this is one of the only and best way to link the User and Posts table. Now that I have the owner of the post, I did another join with another Post table to join where the Id of the Post = AcceptedAnswerId. This gave me which users had the accepted answer to a post. To find how many accepted answers a user had, I used COUNT:
+
+```{r}
+dbGetQuery(db,"SELECT DISTINCT U.Id,U.DisplayName,COUNT(*) AS Accepted_Count
+FROM Posts AS A, Posts AS Accepted, Users AS U
+           WHERE U.Id = A.OwnerUserId AND
+           A.Id = Accepted.AcceptedAnswerId
+           GROUP BY U.Id
+           ORDER BY Accepted_Count DESC
+           LIMIT 5")
+```
+
+Now that I have this, I extracted the relevant information and ordered by the top 75 users.
+
+```{r}
+top_75 = dbGetQuery(db,"SELECT DISTINCT U.Id,Accepted.PostTypeId,COUNT(*) AS Accepted_Count,U.DisplayName,U.CreationDate,U.Location,MIN(A.CreationDate) AS EarliestAnswer, MAX(Accepted.CreationDate) AS Accepted_Answer,Accepted.Tags
+FROM Posts AS A, Posts AS Accepted, Users AS U
+           WHERE U.Id = A.OwnerUserId AND
+           A.Id = Accepted.AcceptedAnswerId 
+           GROUP BY U.Id 
+           ORDER BY Accepted_Count DESC
+           LIMIT 75")
+```
+
+A user can have multiple accepted answers, only if it is for different questions. To find the earliest accepted question for a user, we use MIN. To find the recent accepted question for a user, we use MAX.
+
+Next, I calculated the other questions related to badges and tags for the latter half. For this, I needed to join the top_75 table I made with the badge table in order to map the correct user id with their badge id and retrieve the badge results,names,etc.
+
+```{r}
+badges_75 = sqldf("SELECT GROUP_CONCAT(DISTINCT badges.Name) AS BadgeName, DisplayName, CreationDate, Location, top_75.Id AS User_Id, COUNT(value) AS Count
+FROM top_75
+      JOIN badges
+      ON top_75.Id = badges.UserId
+      GROUP BY top_75.Id
+      ORDER BY Count DESC")
+```
+
+Here is how the final result looks like with the joined tables by User.Id.
+
+```{r}
+sqldf("SELECT top_75.DisplayName,top_75.CreationDate AS UserCreationDate,top_75.Location,badges_75.Count AS NumberofBadges,badges_75.BadgeName,top_75.EarliestAnswer,top_75.Accepted_Answer AS RecentAccepted,top_75.Tags FROM top_75
+      JOIN badges_75
+      ON top_75.Id = badges_75.User_Id
+      LIMIT 10")
+```
+
+I did have one error that I could not fix: Getting the correct count of tags.
+
+Tables Used: Self-join on Posts, Users
+
+
+
+**24. How many questions received no answers (accepted or unaccepted)? How many questions had no accepted answer?**
+
+```{r}
+# Checked that DISTINCT AcceptedAnswerId is empty
+dbGetQuery(db, "SELECT COUNT(*) AS No_Answer FROM Posts
+           WHERE AnswerCount = 0 AND
+           PostTypeId = 1")
+
+dbGetQuery(db, "SELECT COUNT(*) AS No_Accepted FROM Posts
+           WHERE AcceptedAnswerId = '' AND
+           PostTypeId = 1")
+```
+
+All the information can be gathered from the Posts table. Because the question specifically asks for question, I set a constraint such that PostTypeId = 1. To find how many questions received no answer or had no accepted answer, respectively, I found where ANSWERCOUNT = 0 and AcceptedAnswerId is empty -> ''.
+
+Tables Used: Posts
+
+
+
+**25.) What is the distribution of answers per posted question?**
+
+This question is identical to Q16, where I had to find the distribution of comments for each question. I used the same process.
+
+```{r}
+distribution_answers = 
+dbGetQuery(db, "SELECT DISTINCT Title,Id,AnswerCount FROM Posts
+           WHERE PostTypeId = 1")
+
+distribution_anscounts = table("Number of Answers" = distribution_answers$AnswerCount)
+distribution_anscounts
+```
+
+From above, we see the frequency table of the answers for each question. For example, there were 66970 questions that had no answers. This is valid as the question I computed before this (Q24) displayed the same value. To make the shape and distribution more clear, I made a plot
+
+```{r}
+# Graphically
+plot(distribution_anscounts, xlab = "Number of Answers", ylab = "Frequency", main = "Distribution of Number of Answers Per Question")
+```
+
+Very right skewed. Most of the data lies on the left side, which means that most of the questions had a few (1-3) answers per question.
+
+Tables Used: Posts
+
+
+
+**26.) What is the length of time for a question to receive an answer? To obtaining an accepted answer?**
+
+
+Thought Process: For considering the length of time for a question to receive an answer, I wanted to subtract the date of the very first answer (not accepted) received by the question by the date of the posted question. I used a self join on the Posts table because we need to extract two different date times, one for the Questions and the other for the Answers.
+
+I set Q.Id = A.ParentId because I wanted to find all the answers associated for every question. I also set the constraint of PostTypeId to be 1 for a question. Next, I extracted the relevant variables I wanted, which includes the Q.Id,A.ParentId,A.CreationDate,Q.CreationDate,and the unixepoch for the Answer and Question CreationDates. I will elaborate on using unixepoch later.
+
+Now I have a table that looks like this
+
+```{r,echo=FALSE}
+dbGetQuery(db, "SELECT Q.Id AS Question_Id,A.ParentId,A.CreationDate AS Answer_Date,Q.CreationDate AS Question_Date,(unixepoch(strftime('%Y-%m-%d %H:%M:%f', A.CreationDate))) AS Answers, unixepoch(strftime('%Y-%m-%d %H:%M:%f', Q.CreationDate)) AS Questions
+FROM Posts AS A, Posts AS Q
+    WHERE Q.Id = A.ParentId 
+    AND Q.PostTypeId = 1
+    ORDER BY A.ParentId
+    LIMIT 10
+    ")
+```
+
+Notice how we have multiple ParentIds corresponding to a QuestionId. The number of counts of a ParentId to a Question is the number of answers for that question. After I completed this step, I wanted to find the MINIMUM answer date, as this displays the quickest time a question receives an answer. To do this, I used the MIN function on A.CreationDate. In addition, because the MIN function will constrain the output (remove ParentIds that are not of minimum date), we have to use GROUP BY A.ParentId to show the other tuples.
+
+```{r}
+dbGetQuery(db, "SELECT Q.Id AS Question_Id,A.ParentId,MIN(A.CreationDate) AS Answer_Date,Q.CreationDate AS Question_Date,(unixepoch(strftime('%Y-%m-%d %H:%M:%f', A.CreationDate))) AS Answers, unixepoch(strftime('%Y-%m-%d %H:%M:%f', Q.CreationDate)) AS Questions
+FROM Posts AS A, Posts AS Q
+    WHERE Q.Id = A.ParentId 
+    AND Q.PostTypeId = 1
+    GROUP BY A.ParentId
+    LIMIT 3
+    ")
+```
+
+We can double check this result with the other table above. We see that the minimum date for answer and corresponding question date is correct. This is where I explain unixepoch. I used a nested function: unixepoch(strftime()) to first convert the CreationDate format of YYYY-MM-DDTHH:MM:SS.SSS into YYYY-MM-DD HH:MM:SS.SSS using strftime. After I received the strftime result, I used unixepoch to convert the converted Date into a format of seconds. Using this way, I could easily find the difference between the Answer and Question dates as they were both in seconds. Following this, I set the names of the unixepoch(strftime) values to Answers and Questions, which are represented in seconds as type int. I also had to use a subquery, as the newly created variable names in the aforementioned sentence did not exist in the original table. I also converted the seconds into minutes as my final result.
+
+```{r}
+# Length of time for a Question to Receive an Answer
+dbGetQuery(db, "SELECT Answer_Date,Question_Date,((Answers-Questions)/60) AS MinutesToReceiveAnswer,Question_Id
+           FROM(SELECT COUNT(*),Q.Id AS Question_Id,A.ParentId,MIN(A.CreationDate) AS Answer_Date,Q.CreationDate AS Question_Date,(unixepoch(strftime('%Y-%m-%d %H:%M:%f', A.CreationDate))) AS Answers, unixepoch(strftime('%Y-%m-%d %H:%M:%f', Q.CreationDate)) AS Questions
+FROM Posts AS A, Posts AS Q
+    WHERE Q.Id = A.ParentId 
+    AND Q.PostTypeId = 1
+    GROUP BY A.ParentId) 
+    ORDER BY Question_Id
+    LIMIT 5")
+```
+
+
+Finding the length of time for an accepted answer uses almost the exact process above. The only difference is that we need to do an additional join from the Posts table to join the Answer Id to the AcceptedAnswerId to extract all the Accepted Answers for a post. 
+
+```{r}
+# Accepted Answer
+
+dbGetQuery(db, "SELECT Answer_Date,Question_Date,((Answers-Questions)/60) AS MinutesToReceiveAnswer,Question_Id FROM
+(SELECT Q.Id AS Question_Id,MIN(A.CreationDate) AS Answer_Date, Q.CreationDate AS Question_Date,(unixepoch(strftime('%Y-%m-%d %H:%M:%f', A.CreationDate))) AS Answers,unixepoch(strftime('%Y-%m-%d %H:%M:%f', Q.CreationDate)) AS Questions,Accepted.AcceptedAnswerId 
+FROM Posts AS A, Posts AS Q, Posts AS Accepted
+    WHERE Q.Id = A.ParentId AND
+    Q.PostTypeId = 1 AND
+    A.Id = Accepted.AcceptedAnswerId
+    GROUP BY A.Id) 
+    ORDER BY Question_Id
+    LIMIT 5
+    ")
+```
+
+Compare this to the first table answered for this question. We see that for the accepted answer table, we have one different Question_Id = 7. This means that question_id = 6 does not have an accepted answer. And this is true as I verified through checking the site
+
+https://stats.stackexchange.com/questions/6
+
+Tables Used: Posts, Self-join on Posts
+
+
+
+**27.) How many answers are typically received before the accepted answer?**
+
+```{r}
+ansb4accept = dbGetQuery(db, "SELECT A.ParentId,Q.Id AS QuestionId,A.Id AS AnswerId,Q.AcceptedAnswerId AS AcceptedId,COUNT(*) AS AnswersBeforeAccepted
+FROM Posts AS A, Posts AS Q
+    WHERE Q.Id = A.ParentId AND
+    AcceptedId > AnswerId AND
+    CAST(AcceptedId AS INT) > 0
+    GROUP BY A.ParentId 
+    ")
+```
+
+```{r}
+table("Answer Counts" = ansb4accept$AnswersBeforeAccepted)
+plot(table(ansb4accept$AnswersBeforeAccepted),xlab = "Answers",ylab = "Frequency",main="Number of Answers Received Before Accepted Answer")
+```
+
+My first thought was that I'm going to have to plot this as a histogram distribution to show the counts of answers and the frequencies of the counts. From this, I needed to find all of the answers that were related to a question, and the corresponding accepted answer. After we get this data, we can imagine a data frame with two column: One for AcceptedId, the other for Answer. To find how many answers were received before the accepted, I needed to find the tuples where the numerical value of AcceptedId was greater than AnswerId. Here is an example:
+
+```{r}
+dbGetQuery(db, "SELECT A.ParentId,Q.Id AS QuestionId,A.Id AS AnswerId,Q.AcceptedAnswerId AS AcceptedId
+FROM Posts AS A, Posts AS Q
+    WHERE Q.Id = A.ParentId
+    ORDER BY A.ParentId
+    LIMIT 20
+    ")
+```
+
+In the example above, if we look at QuestionId = 1, we see that there are no acceptedIds greater than answerIds. For QuestionId = 2, however, we see that there is an AcceptedId = 59 that is greater than AnswerId, therefore in this case we would say that question Id = 2 would have one answer received before the accepted. In addition, I noticed that some values in AcceptedId were = 0, which meant that the question did not have an acceptedId. For this, I filtered out the AcceptedIds = 0. After this process, I extracted the insights.
+
+
+Tables Used: Self-join on Posts
+
+
+
