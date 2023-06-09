@@ -1,0 +1,862 @@
+---
+title: "Reading Log Files - Eric Sun"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+I validated the first task of reading in the log files through the strategy handout on the 141B repository. The file Merged.log contains 99,968 lines of log messages, with five different log files of varying lengths. I'm splitting the lines based on 5 components in each log message: Date-Time, Host, App, Process ID, and Message. I will also add a new column that will specify which log file name the message is originally from for each message. An important feature of the data is that we assume that each log-file message is a single line, so we do not have to worry about losing data.
+
+```{r, warning=FALSE, message=FALSE}
+file <- readLines("MergedAuth.log") # there are 99,968 elements
+length(file)
+file = file[file != ""] # 3 white spaces
+length(file)
+```
+
+I read in the MergedAuth.log file using readLines() and removed all the empty lines. This gave me a total of 99665 lines, with 5 of them being the log file name, and the rest being log messages. 
+
+
+## Regular Expression
+
+```{r}
+rx = gregexpr(
+  "^(?P<Date_Time>[[:alpha:]]+ [0-9\\s]?[0-9] \\d{2}:\\d{2}:\\d{2}|# .*.log$)\\s?(?P<Host>[a-zA-Z0-9-]*)\\s?(?P<App>[\\w\\.\\-\\s\\(\\)]+)?\\[?(?P<PID>\\d+)?\\]?:?(?P<Message>.+)?$",
+  file,
+  perl = TRUE
+)
+
+table(
+  grepl(
+    "^(?P<Date_Time>[[:alpha:]]+ [0-9\\s]?[0-9] \\d{2}:\\d{2}:\\d{2}|# .*.log$)\\s?(?P<Host>[a-zA-Z0-9-]*)\\s?(?P<App>[\\w\\.\\-\\s\\(\\)]+)?\\[?(?P<PID>\\d+)?\\]?:?(?P<Message>.+)?$",
+    file,
+    perl = TRUE
+  )
+)
+```
+
+The regex above matched every line in the file. It took a lot of trial and error to perfectly match every line since the structure of the messages was not consistent. Although the regex above matched all lines, I still had to ensure that the sub-patterns matched the correct content for all the lines. I verified that I grabbed every line correctly using the strategies shown below
+
+
+## Verification of Regex
+
+We can verify that our expression matched every line by checking how many matches there are for each line. 
+
+```{r}
+table(sapply(rx, length)) # how many matches of sub-pattern per line (all should have length 1)
+```
+
+Indeed, we see that 99965 of the lines matched rx exactly once. We can also verify that the value is the starting position for each match = 1.
+
+```{r}
+table(sapply(rx, `[`, 1) == 1) # value for lines should be 1
+```
+
+Lastly, we can verify that the length for all of the regex matches is equal to the number of characters in each line.
+
+```{r}
+rxlen = sapply(rx, function(x)
+  attr(x, "match.length"))
+
+table(rxlen)
+table(rxlen == nchar(file)) # length of match = # of char in file
+```
+
+\newpage
+
+# Part I.) CREATING THE LOG FILE DATAFRAME
+
+After validating that the pattern for each line was read in correctly, I began to create the data frame. 
+
+```{r}
+# rx[[3]]
+s = attr(rx[[3]], "capture.start")
+substring(file[3], s, s + attr(rx[[3]], "capture.length") - 1)
+```
+
+I extracted the five categories (date_time, app, etc.) by looking at what capture.start and capture.length my sub patterns extracted. For this, I checked only a couple elements of rx to ensure that the capture groups were being captured properly. Through using substring to get the matches and verifying it manually by counting the start and end values for every group, I verified that the capture.groups and extractions were accurate.
+
+To do the same process above for the entire file, I used this piece of code below:
+
+```{r}
+caps = mapply(function(str, match) {
+  s = attr(match, "capture.start")
+  substring(str, s, s + attr(match, "capture.length") - 1) # add -1 to not count last char
+}, file, rx)
+```
+
+This returns a matrix with 5 rows and 99965 columns. I transposed the matrix and converted it into a data frame. After that, I cleaned the data frame by setting the row names to NULL and renaming the column names to their respective attribute.
+
+```{r}
+log_files = as.data.frame(t(caps))
+row.names(log_files) = NULL
+colnames(log_files) = c("Date_Time", "Host", "App", "ID", "Message")
+
+dim(log_files)
+class(log_files)
+head(log_files)
+tail(log_files)
+```
+
+The dimension of log_files is 99965 x 5. The class is data frame. The head() and tail() were used to compare to the original MergedAuth.log file.
+
+Now that I built the data frame based on the 5 components of the log file, I needed to add one more column that would specify which log file a message is under.
+
+
+## Adding the Additional Logfile Column
+
+```{r}
+starts = grepl("^#", file) # logical
+head(which(starts)) # index
+```
+
+The first step to identify which message came from one of the five files was to grab the log file titles in the original file by using grepl(). I did not use grep(), which returns the actual index of the pattern. I will elaborate further down below. 
+
+```{r}
+g = cumsum(starts) # cumulative sum
+```
+
+The reason I used grepl() was because of the fact that I would have to use cumsum() later. In the code above, the variable "starts" returns a logical vector of TRUE and FALSE, which can also be represented as 1 and 0. In starts, it will return TRUE when it matches ^#, or a log file name, and FALSE otherwise. If we use cumsum(starts), it will produce an integer vector consisting of values from 1:5 that will steadily increase only when it finds another TRUE value (another log file name) because we have 5 different log file names.  From this, we can identify which message is part of a specific log file by matching it to the corresponding number, which represents the log file name.
+
+Now, lets split the original file by variable g
+
+```{r}
+gtext = split(file, g) # split by 1:5 factor
+```
+
+Splitting the entire file by cumsum(starts), we get a list that includes 5 different large character files. The different files show us how many messages are in each log file.
+
+```{r}
+tbl = sapply(gtext, function(x)
+  grepl("^#", x[1]))
+table(tbl)
+Filename = g[tbl]
+```
+
+We store the information in Filename, and add it to our log_files data frame.
+
+```{r}
+log_files = cbind(log_files, Filename)
+```
+
+After the column bind to log_files, I replaced the numbers with the actual log file name using gsub(). I also cleaned the df by removing the actual log file names within and setting the row names to NULL.
+
+```{r}
+startpos = grep("^#", file)
+
+# Adding additional column for log_file names
+log_files$Filename = gsub("1", "auth.log", log_files$Filename)
+log_files$Filename = gsub("2", "auth2.log", log_files$Filename)
+log_files$Filename = gsub("3", "loghub/Linux/Linux_2k.log", log_files$Filename)
+log_files$Filename = gsub("4", "loghub/Mac/Mac_2k.log", log_files$Filename)
+log_files$Filename =  gsub("5", "loghub/OpenSSH/SSH_2k.log", log_files$Filename)
+
+# Now remove log file names
+log_files = log_files[-c(startpos), ]
+row.names(log_files) = NULL # reorder the row values
+
+# Trim white spaces for values
+for (i in 1:ncol(log_files)) {
+  log_files[, i] = trimws(log_files[, i])
+}
+```
+
+This is how our log_files looks like now:
+
+```{r}
+head(log_files)
+tail(log_files)
+```
+
+The data frame looks good. Now all that is left to check is for NAs in the App/ID columns.
+
+```{r}
+log_files$Date_Time = as.POSIXct(strptime(log_files$Date_Time, "%b %d %t %H:%M:%S"))
+table(is.na(log_files$timestamp))
+
+# Checking for NAs
+log_files$ID = replace(log_files$ID, log_files$ID == "", NA) # replace empty space with NA
+length(which(is.na(log_files$ID), arr.ind = TRUE)) # count of NAs in PID -> 946
+
+log_files$App = replace(log_files$App, log_files$App == "", NA)
+length(which(is.na(log_files$App), arr.ind = TRUE)) # count of NAs in App -> 0 
+```
+
+I converted all the date_times to POSIXct and checked for NA values afterwards. There were no NAs, so the format was correct.
+In addition, I replaced all the potential empty spaces in the App/ID columns with NAs, and checked the counts. There were 946 counts of NAs within IDs, and 0 for Apps.
+
+This is the output of the final log_files:
+
+```{r}
+head(log_files)
+tail(log_files)
+```
+
+Some last important double checks:
+
+```{r}
+stopifnot(nrow(log_files) == (length(file) - 5))
+dim(log_files)
+```
+
+I had to double check that the number of rows in the data frame was equal to the length of the file. I subtracted five from the file because I removed the log file names from my data frame. The dimension of log_files looks good.
+
+\newpage
+
+# Part II.) VALIDATING AND EXPLORING LOG.FILES
+
+## Verifying PIDs
+
+```{r}
+table(grepl("^[0-9]+$", log_files$ID))
+table(log_files$ID == as.numeric(log_files$ID))
+summary(as.numeric(log_files$ID))
+```
+
+It is already known that 946 of the PIDs are not numbers (NAs). I re-verified this using table() and grepl([0-9]), and found that 946 of these values were not numerical. If we do not consider the NA values, then the remaining 99014 values are numeric. I confirmed this through summary(as.numeric).
+
+## Lines in Each File
+
+```{r}
+summary(gtext)
+```
+
+We know that from applying the cumulative sums, we get 5 groups. We count how many appearances there are for each group. For each of the groups (1:5), we want to subtract by 1 to remove the log file name in gtext and only include the messages.
+
+auth.log = 86839
+
+auth2.log = 7121
+
+loghub/Linux/Linux_2k.log = 2000
+
+loghub/Mac/Mac_2k.log = 2000
+
+loghub/OpenSSH/SSH_2k.log = 2000
+
+This should also sum up to the length of our originally modified file = 99960 (removed whitespaces and 5 log file names), which is true.
+
+## Range of Date Times for Whole and Individual Log Files
+
+```{r}
+# DATETIME FOR ALL MESSAGES
+date_time_all = c(min(log_files$Date_Time), max(log_files$Date_Time))
+date_time_all
+```
+
+The entire log file ranges from March 27 13:06:56 to December 31 22:27:48. I verified this using the min() and max() functions. The functions match correctly because the date_time variables are of class POSIXct. Just in case, I manually verified the max and min by finding it in the MergedAuth.log file.
+
+```{r}
+five_logfiles = split(log_files, log_files$Filename)
+
+# DATETIME FOR INDIVIDUAL LOG FILES
+for (i in 1:length(five_logfiles)) {
+  print(c(
+    min(five_logfiles[[i]]$Date_Time),
+    max(five_logfiles[[i]]$Date_Time)
+  ))
+}
+```
+
+```{r}
+# DAYS SPANNED FOR INDIVIDUAL LOG FILES
+for (i in 1:length(five_logfiles)) {
+  print(difftime(as.Date(max(
+    five_logfiles[[i]]$Date_Time
+  )), as.Date(min(
+    five_logfiles[[i]]$Date_Time
+  ))))
+}
+```
+
+Auth.log = November 30 6:39:00 to December 31 22:27:48, 32 day span
+
+Auth2.log = March 27 13:06:56 to April 20 14:14:29, 24 day span
+
+Loghub/Linux/Linux_2k.log = June 14 15:16:01 to July 27 14:42:00, 43 day span
+
+Loghub/Mac/Mac_2k.log = July 1 9:00:55 to July 8 08:10:46, 7 day span
+
+Loghub/OpenSSH/SSH_2k.log = December 10 06:55:46 to December 10 11:04:45, 0 day span
+
+Same concept of correct functionality applies to difftime() to find the span of days for each individual log file.
+
+## Applications/Versions
+
+```{r}
+unique(log_files$App)
+```
+
+Through visual inspection, I see that majority of the apps do not contain numbers. There are apps that seem to have the numbers as additional structure, such as BezelServices 255.10 and Syslogd 1.4.1.
+
+## Host Value for Individual Files
+
+```{r}
+# General
+starts = grep("^#", file, value = TRUE)
+unique(log_files$Host)
+length(unique(log_files$Host))
+
+# Auth.log
+unique(five_logfiles[[1]]$Host)
+# Auth2.log
+unique(five_logfiles[[2]]$Host)
+# Loghub/Linux
+unique(five_logfiles[[3]]$Host)
+# Loghub Mac
+unique(five_logfiles[[4]]$Host)
+# Loghub/OpenSSH
+unique(five_logfiles[[5]]$Host)
+```
+
+The host value is constant for:
+
+auth.log (ip-172-31-27-153)
+
+auth2.log (ip-10-77-20-248)
+
+loghub/Linux/Linux_2k.log (combo)
+
+loghub/OpenSSH/SSH_2k.log (LabSZ)
+
+The host is not constant only for (loghub/Mac/Mac_2k.log). There are 38 different hosts.
+
+
+## Most common App on different hosts
+
+The approach for this was to create a frequency table for the counts and find the max counts of an app for a particular Host column.
+
+```{r}
+apps = table(log_files$App, log_files$Host) # Create a table showing frequency counts of Apps for each Host
+apply(apps, 2, FUN = max) # Actual value of Max counts of an app (not the actual name)
+
+apps = as.data.frame.matrix(as.matrix(apps)) # Turn into df
+common_app = rownames(apps)[apply(apps, 2, which.max)] # Apply to find the index at which the max occurs, and extract the app name (row)
+```
+
+The numbers above corresponding to each Host represents the max number of counts (most frequent) for a particular App.
+
+To see which Apps were the most common:
+
+```{r}
+table(common_app)
+```
+
+There are many frequencies of the app "Kernel" on different hosts (33). The numbers above sum up to 42, which correspond to the number of hosts and verifies that this is correct.
+
+```{r}
+tail(rbind(apps, "Most_Common" = common_app), 1)
+```
+
+\newpage
+
+# LOGINS - VALID AND INVALID
+
+## Valid Logins - User/IP
+
+My approach to finding valid/successful logins was to search for related keywords within the entire file. I used the following (ignoring case) keywords to represent this idea: Accepted, New Session, Connection From, Systemd-login, and Session Opened. There were 3796 lines.
+
+```{r}
+valid = grep(
+  "(accepted|new session|connection from|systemd-login|session opened)",
+  file,
+  value = TRUE,
+  ignore.case = TRUE
+) # 3796
+
+table(
+  grepl(
+    "(accepted|new session|connection from|systemd-login|session opened)",
+    file,
+    ignore.case = TRUE
+  )
+) # 3796
+```
+
+After extracting the successful messages, I essentially created a subset of my original data frame with only the messages with the successful related keywords (still including the 5 components of the message). Then, I extracted only the "message" component pf the new data frame, and trimmed the whitespaces.
+
+```{r}
+# Create new df based on successful messages and extract user/ip from messages column using regex
+valid_rx = gregexpr(
+  "^(?P<Date_Time>[[:alpha:]]+ [0-9\\s]?[0-9] \\d{2}:\\d{2}:\\d{2}|# .*.log$)\\s?(?P<Host>[a-zA-Z0-9-]*)\\s?(?P<App>[\\w\\.\\-\\s\\(\\)]+)?\\[?(?P<PID>\\d+)?\\]?:?(?P<Message>.+)?$",
+  valid,
+  perl = TRUE
+)
+
+# Valid_extract = new df
+valid_extract = as.data.frame(t(mapply(function(str, match) {
+  s = attr(match, "capture.start")
+  substring(str, s, s + attr(match, "capture.length") - 1)
+}, valid, valid_rx)))
+
+# Structuring
+row.names(valid_extract) = NULL
+valid_usersip = data.frame(valid_extract$V5)
+
+# Extract message and trim any white spaces
+valid_usersip$valid_extract.V5 = trimws(valid_usersip$valid_extract.V5)
+```
+
+The next step is to find the users and IPs of the successful login messages. 
+
+## Valid Users
+
+```{r}
+table(grepl("root", valid, ignore.case = TRUE))
+# Searching for Users (Process of search and narrow by elimination)
+table(
+  grepl(
+    "(root|ubuntu|elastic_user_[0-9]|test|cyrus|news|fztu)",
+    valid,
+    ignore.case = TRUE
+  )
+) 
+```
+
+My strategy to find all the users was to first quickly inspect the lines to see if any user existed. By just looking at the file, I saw many instances of the user "root". For clarification of how I knew the user was root:
+
+"Nov 30 06:47:01 ip-172-31-27-153 CRON[22087]: pam_unix(cron:session): session opened for user root by (uid=0)"
+
+The word "root" follows after user. I used this same process to extract the users from most of the other lines. The reason I say most of the other lines is because few lines did not have the "user" before the "name" (i.e root). 
+
+I also wanted to know how many other lines shared the same user root, and used grepl() nested in table() to get the counts. Then, I just repeated this process of search and elimination for users in the file.
+In total, I found that 2641 out of the 3796 successful messages had a specified user.
+
+I wanted to make sure that I extracted ALL of the possible users from the messages. I knew that there possibly existed 3796-2641 = 1155 messages without a user, and I verified that through below:
+
+```{r}
+# Non users
+na_users = valid[!grepl("(root|ubuntu|elastic_user_[0-9]|test|cyrus|news|fztu)", valid, perl = TRUE)] 
+head(na_users)
+length(na_users)
+
+# Show that remaining success messages do not have users specified
+head(grep("connection from", na_users, value = TRUE, ignore.case = TRUE))
+table(grepl("connection from|removed session|new seat|watching", na_users, ignore.case = TRUE))
+na_users[!grepl("connection from|removed session|new seat|watching", na_users, ignore.case = TRUE)]
+```
+
+I extracted the lines that did not specify a user that I saw in the successful messages and put the information into var na_users. As expected, there were 1155 messages.
+
+Then, I constructed another table() + grepl() expression to extract the messages that I know do not have users by visual inspection. The table counted 1155 of these expressions as TRUE, which verifies my statement.
+
+Using the pattern I constructed for users, I put it in gregexpr() and obtained the capture groups. After extracting the groups, I manipulated the data frame and cleaned it to contain all the information needed.
+
+```{r}
+# Get expression for finding users
+user_rx = gregexpr("(root|ubuntu|elastic_user_[0-9]|test|cyrus|news|fztu)", valid, perl = TRUE)
+
+users_success = mapply(function(str,match){
+  s = attr(match, "capture.start")
+  substring(str,s,s+attr(match,"capture.length")-1)
+}, valid, user_rx)
+
+# Data Manipulation
+users_success = as.data.frame(users_success)
+users_success = t(users_success)
+users_success = users_success[,-2]
+users_success = as.data.frame(users_success)
+row.names(users_success) = NULL
+
+# Equals 1155, same value above when computing for NA users (verified)
+table(users_success[users_success == ""]) 
+
+# Replace no users with NA
+users_success$users_success = replace(users_success$users_success, users_success$users_success == "", NA)
+
+col = cbind(users_success, valid_usersip$valid_extract.V5)
+head(col)
+```
+
+## Valid IPs
+
+I used a similar process to find the IPs for each successful login. I knew that the syntax for a regular IP contained only numbers and dots. From this, I constructed a regular expression to extract this specific pattern.
+
+```{r}
+# Searching for IP
+table(grepl("(\\d+\\.\\d+\\.\\d+\\.\\d+)", valid, ignore.case = TRUE)) # 1153 counts
+tail(valid[!grepl("(\\d+\\.\\d+\\.\\d+\\.\\d+)", valid, perl = TRUE)])
+```
+
+Next, we want to create a data frame based on the sub pattern of IP successes.
+
+```{r}
+library(stringr)
+# Extracts IPs
+ip_success = as.data.frame(str_extract(valid, regex("(\\d+\\.\\d+\\.\\d+\\.\\d+)")))
+colnames(ip_success) = "IP"
+dim(ip_success)
+
+# Counts of Unique IPs
+nrow(unique(ip_success))
+
+# Combine DF for successful logins
+success = cbind(valid_usersip, users_success, ip_success)
+success = success[c("users_success","IP","valid_extract.V5")]
+colnames(success) = c("User","IP","Message")
+
+# Showing Results
+tail(success)
+```
+
+Now, we have a table that shows the successful users and IPs for the successful log file messages subsetted from the MergedAuth.log file.
+
+\newpage
+
+## Invalid Logins - User/IP
+
+I did virtually the same process for invalid as I did with valid. The only difference is the usage of different keywords.
+
+```{r}
+invalid = grep(
+  "(failed|fatal|warning|invalid|error|failure|fail)",
+  file,
+  value = TRUE,
+  ignore.case = TRUE
+) #39128
+
+table(
+  grepl(
+    "(failed|fatal|warning|invalid|error|failure|fail)",
+    invalid,
+    ignore.case = TRUE
+  )
+)
+```
+
+```{r}
+# Regex for Invalid User
+invalid_rx = gregexpr("^(?P<Date_Time>[[:alpha:]]+ [0-9\\s]?[0-9] \\d{2}:\\d{2}:\\d{2}|# .*.log$)\\s?(?P<Host>[a-zA-Z0-9-]*)\\s?(?P<App>[\\w\\.\\-\\s\\(\\)]+)?\\[?(?P<PID>\\d+)?\\]?:?(?P<Message>.+)?$", invalid, perl = TRUE)
+
+# Create invalid data frame
+invalid_extract = as.data.frame(t(mapply(function(str,match){
+  s = attr(match, "capture.start")
+  substring(str,s,s+attr(match,"capture.length")-1)
+}, invalid, invalid_rx)))
+
+# Structuring
+row.names(invalid_extract) = NULL
+invalid_userip = data.frame(invalid_extract$V5)
+
+invalid_userip$invalid_extract.V5= trimws(invalid_userip$invalid_extract.V5)
+head(invalid_userip$invalid_extract.V5)
+```
+
+I found 39128 counts failures/invalid logins for the entire file based on the keywords I selected. I also extracted only the "message" component of the entire log file message for parsing later on.
+
+\newpage
+
+## Invalid Users
+
+```{r, results='hide', include = FALSE, echo = FALSE}
+table(grepl("(root|ubuntu|elastic_user_[0-9]|test|cyrus|news|fztu|user [a-z]+|user [0-9]+)", invalid, ignore.case = TRUE))
+# Searching for Users (Process of search and narrow by elimination)
+table(
+  grepl(
+    "(root|ubuntu|elastic_user_[0-9]|test|cyrus|news|fztu|user [a-z]+|user [0-9]+)",
+    invalid,
+    ignore.case = TRUE
+  )
+) 
+```
+
+Out of the 39128 counts of invalid log file messages, I found that 30084 of those lines have users, while the rest (9044) do not.
+
+```{r}
+# Non users
+na_users_invalid = invalid[!grepl(
+  "(root|ubuntu|elastic_user_[0-9]|test|cyrus|news|fztu|user [a-z]+|user [0-9]+)",
+  invalid,
+  perl = TRUE,
+  ignore.case = TRUE
+)]
+head(na_users_invalid)
+length(na_users_invalid)
+```
+
+For below, I created the data frame for invalid users.
+
+```{r}
+# Get expression for finding users
+user_invalid_rx = gregexpr(
+  "(root|ubuntu|elastic_user_[0-9]|test|cyrus|news|fztu|user [a-z]+|user [0-9]+)",
+  invalid,
+  perl = TRUE,
+  ignore.case = TRUE
+)
+
+users_invalid = mapply(function(str, match) {
+  s = attr(match, "capture.start")
+  substring(str, s, s + attr(match, "capture.length") - 1)
+}, invalid, user_invalid_rx)
+
+# Data Manipulation
+users_invalid = as.data.frame(users_invalid)
+users_invalid = t(users_invalid)
+users_invalid = users_invalid[, -2]
+users_invalid = as.data.frame(users_invalid)
+row.names(users_invalid) = NULL
+
+# Equals 9044
+table(users_invalid[users_invalid == ""])
+
+# Replace no users with NA
+users_invalid$users_invalid = replace(users_invalid$users_invalid,
+                                      users_invalid$users_invalid == "",
+                                      NA)
+```
+
+I did some basic data manipulations to clean the df. 
+
+## Invalid IPs
+
+```{r}
+library(stringr)
+
+table(grepl("(\\d+\\.\\d+\\.\\d+\\.\\d+)", invalid, ignore.case = TRUE)) # 20922 counts
+tail(invalid[!grepl("(\\d+\\.\\d+\\.\\d+\\.\\d+)", invalid, perl = TRUE)])
+
+ip_invalid = as.data.frame(str_extract(invalid, regex("(\\d+\\.\\d+\\.\\d+\\.\\d+)")))
+colnames(ip_invalid) = "IP"
+dim(ip_invalid)
+
+# IP Count
+nrow(unique(ip_invalid))
+
+invalid_df = cbind(invalid_userip, users_invalid, ip_invalid)
+invalid_df = invalid_df[c("users_invalid", "IP", "invalid_extract.V5")]
+colnames(invalid_df) = c("User", "IP" , "Invalid")
+
+# Change IPs to factor
+invalid_df$IP = as.factor(invalid_df$IP)
+table(is.na(invalid_df$IP)) # Did not lose data to coercion
+
+# Showing Results
+head(invalid_df)
+```
+
+The strategy for finding invalid IPs was the same with valid IPs. I found 20922 counts of IPs for invalid messages, and 1691 are unique IPs.
+
+After I created the invalid data frame for users and IPs, I conducted some exploratory data analysis.
+
+## Multiple Invalid Users from Same IP
+
+To find if multiple invalid users came from the same IP, I first grouped the data frame by IP.
+
+```{r, warning = FALSE, message=FALSE}
+library(tidyverse)
+multiple_invalid_ip = invalid_df %>% arrange(IP)
+head(multiple_invalid_ip)
+```
+
+Next, I wanted to only see the unique IP/User pairs to determine if there were multiple invalid users for every IP.
+
+```{r}
+head(unique(multiple_invalid_ip[, c("User", "IP")]), 20) # Total 1692 unique IPs
+
+# Store new df
+df1 = unique(multiple_invalid_ip[, c("User", "IP", "Invalid")]) # 9626
+```
+
+Now that I have extracted all the unique pairs, I needed to examine which IPs actually had multiple invalid user logins. However before I do this, I noticed that there existed some NA values in the user/IP columns. We want to remove these NAs as they can be misleading.
+
+```{r}
+# Remove NAs in User or IP
+df1 = df1 %>% filter_at(vars(User,IP), all_vars(!is.na(.))) # 8373 counts
+```
+
+We see that there were 1300 counts of NAs. Next, I constructed a tibble to illustrate the user counts per IP. To extract the appropriate IPs, I removed the IPs that did not have multiple counts of (num_users) invalid users.
+
+```{r}
+# Get the user count for every unique IP
+ip_counts = df1 %>% group_by(IP) %>% summarize(num_users = n_distinct(User))
+head(ip_counts, 25)
+```
+
+This shows us how many different users there were for every IP. The next step is to remove the IPs with num_users = 1.
+
+```{r}
+# Remove IPs that do not have multiple users
+multi_user_ips = ip_counts %>% filter(num_users > 1) %>% select(IP)
+
+# IPs with multiple invalid users
+head(multi_user_ips)
+```
+
+Now, we just extract the IP values
+
+```{r}
+# Finished data including multiple invalid users
+multi_invalid_ip = df1 %>% filter(IP %in% multi_user_ips$IP) 
+dim(multi_invalid_ip) 
+head(multi_invalid_ip, 20)
+tail(multi_invalid_ip, 20)
+```
+
+I only used the first 20 rows as demonstration. But we see that there are multiple invalid users for one IP address. There are 7168 rows in this new data frame.
+
+## Valid Logins from IP with Multiple Users
+
+To find valid logins that correspond to the IP addresses obtained for multiple invalid users above, I used inner_join() on the data frames containing the successful messages
+and failed messages. By joining the two by their unique IP and USER, we can see if there are any matches that indicates that there were both valid and invalid logins from the IPs. 
+
+```{r, warning=FALSE, message=FALSE}
+joined_df = inner_join(success, multi_invalid_ip, by = c("User", "IP"))
+head(joined_df[!is.na(joined_df$IP),] %>% group_by(User), 10)
+
+unique(joined_df$IP) 
+```
+
+We observe that there were valid logins for two IPs that had multiple invalid user logins: 85.245.107.41, and 24.151.103.17. 
+
+## Multiple IPs using same Invalid Login
+
+The process of finding multiple IPs using the same invalid login should be similar to finding multiple invalid user logins from the same IP address. The variables are just switched around.
+
+```{r}
+# Arrange by User
+multiple_ip_invalid = invalid_df %>% arrange(User)
+head(multiple_ip_invalid, 10)
+```
+
+From the first 20 rows, we see that the 85.245.107.41 and 24.151.103.17 IPs share the same invalid user login. There were many instances of those two IPs having invalid logins for elastic_users[0-9], which is worth nothing.
+
+```{r}
+# Find unique User/IP pairs
+head(unique(multiple_ip_invalid[, c("User", "IP")]), 20)
+
+df2 = unique(multiple_ip_invalid[, c("User", "IP")])
+```
+
+And again, extracting the appropriate users with multiple IPs.
+
+```{r}
+df2 = df2 %>% filter_at(vars(User,IP), all_vars(!is.na(.)))
+
+# Get the user count for every unique User (462 counts)
+user_counts = df2 %>% group_by(User) %>% summarize(num_ips = n_distinct(IP))
+
+# Remove users that do not have multiple IPs
+multi_ips_user = user_counts %>% filter(num_ips > 1) %>% select(User)
+
+# Finished data including multiple invalid IPs
+multi_ip_invalid = df2 %>% filter(User %in% multi_ips_user$User)
+head(multi_ip_invalid, 20)
+```
+
+## Related IPs from same Domain
+
+Based on the previous question, we want to find if the related multiple IPs that use the same invalid login are from the same domain. The process I used for this was to first extract the domains, and add it to the data frame:
+
+```{r}
+ip_domains = (str_extract(multi_ip_invalid$IP, regex("(\\d+\\.\\d+\\.\\d+)")))
+multi_ip_invalid$Domain = ip_domains
+head(multi_ip_invalid)
+```
+
+Now we have a data frame that contains the user, the multiple IPs associated with each user, and the corresponding domain for the IPs. To see if the IPs are from the same network given the specified user, we want to extract the count of IPs (for each domain) to be greater than 1. This is because we want to know if there exists multiple IPs in the same domain for a given user.
+
+```{r}
+domain_counts = multi_ip_invalid %>% group_by(Domain) %>% summarise(num_ips = n_distinct(IP))
+# Include domains with multiple unique IPs
+multi_ip_domains = domain_counts %>% filter(num_ips > 1) %>% select(Domain)
+
+result = df2 %>% filter(User == User, str_extract(IP, "^(\\d+\\.\\d+\\.\\d+)") %in% multi_ip_domains$Domain)
+head(result, 20)
+```
+
+From the data above, we see that for each given invalid user, there are corresponding and different IPs that come from the same domain.
+
+## What IP had too many failures
+
+It is important to monitor successful and unsuccessful login attempts to see potential invasions on the machine. I extracted all the lines that had the keyword "authentication failure(s)", and did some analysis.
+
+```{r}
+# Grabs the messages in the file w/ authentication failures
+auth_failures = grep("(authentication failures|maximum authentication attemps)", file, value = TRUE) # 2916 lines
+tail(auth_failures)
+```
+
+First, I found 2916 out of 99960 lines that had authentication failures.
+
+```{r}
+# Df that extracts IPs
+ip_failures = as.data.frame(str_extract(auth_failures, regex("(\\d+\\.\\d+\\.\\d+\\.\\d+)")))
+colnames(ip_failures) = "IP Failures"
+
+# Unique IPs that failed
+unique_ip_fails = unique(ip_failures)
+unique_ip_fails
+
+# Subtract 1 to exclude NA value (106 ip that failed)
+nrow(unique_ip_fails) - 1
+```
+
+```{r}
+# IP with greatest failures
+which.max(table(ip_failures))
+```
+
+In total, there were 106 IPs in the entire file that had too many authentication failures, and IP-49.4.143.105 had the most failures with 83.
+
+\newpage
+
+# SUDO Problems
+
+## User/Machine
+
+```{r}
+sudo = grep("sudo:\\s", file, value = TRUE, ignore.case = TRUE) # 557 TRUE
+```
+
+There are 557 lines in the MergedAuth.log file that run on the Sudo app. I verified this value by also checking on the file in a text editor (Cmd F for finding, it tells you how many matches there are).
+
+Creating a data frame w/ columns for Sudo to Extract Info
+
+```{r}
+sudo_rx = gregexpr(
+  "^(?P<Date_Time>[[:alpha:]]+ [0-9\\s]?[0-9] \\d{2}:\\d{2}:\\d{2}|# .*.log$)\\s?(?P<Host>[a-zA-Z0-9-]*)\\s?(?P<App>[\\w\\.\\-\\s\\(\\)]+)?\\[?(?P<PID>\\d+)?\\]?:?(?P<Message>.+)?$",
+  sudo,
+  perl = TRUE
+)
+
+sudo_df = as.data.frame(t(mapply(function(str, match) {
+  s = attr(match, "capture.start")
+  substring(str, s, s + attr(match, "capture.length") - 1) # add -1 to not count last char
+}, sudo, sudo_rx)))
+```
+
+I used the same process of extracting capture groups from the expression and subsetting the data frame. After this, I needed to extract the unique values in the machine and user columns.
+
+```{r}
+unique(sudo_df$V2) # unique machine(s) for Sudo
+sudo_user = as.data.frame(str_extract(sudo, regex("user\\s?=?[[:alpha:]]+", ignore_case = TRUE)))
+unique(sudo_user)
+```
+
+For the apps run by Sudo, the machine and user, respectively, are: 
+
+ip-10-77-20-248 and Root
+
+## Executables/Programs
+
+I found the programs ran by sudo by looking for the "COMMAND = exec" sub patterns.
+
+```{r}
+sudo_programs = as.data.frame(str_extract(sudo, regex("COMMAND=[a-z/]+", ignore_case = TRUE)))
+colnames(sudo_programs) = "Program"
+
+# Finding the programs
+unique(sudo_programs)
+```
+
+I found 25 unique executables ran via sudo (excluding the NA).
+
+
+
+
