@@ -1,0 +1,96 @@
+---
+title: "141B_HW1_Report"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo = FALSE}
+# set cwd
+setwd("~/Documents/UCD Classes/22-23/Spring Q23 Classes/STA 141B/HW1")
+
+# Useful? - package -> codetools::findGlobals
+# Notes from Discussion:
+# Use is.NA to check for empty columns
+```
+
+## Verifying WEA Files
+
+
+#### Assumptions: 
+
+The structure of the wea files for the 5 locations were consistent, with each starting with the information: 
+
+place - latitude - longitude - time_zone - site_elevation - weather_data_file_units 
+
+The data is also a singular rectangular dataset, and the files all have the same starting and ending structure.
+
+
+#### Method:
+
+I read the data using read.table() and skipped those 6 lines for each file, which gave me a data frame with the data we wanted to extract. In addition, I checked whether there were NAs in the columns, and if that was true the columns would be removed for further inspection. To ensure that all of the data was transferred in properly, I manually went through the data in a text editor to evaluate the first and last few lines and compared it to the head() and tail() of my data frame to check for similarity.
+
+Another method that I used to verify is identifying the pattern in recording the data and checking the dimensions. An observation (row count) was recorded for every hour of each day of each month for a year, which should yield 365 x 24 = 8760 values (unless there were missing values in the data). To verify this, I checked the dimensions of all my wea files and they had 8760 rows.
+
+```{r}
+# WEA function
+open_wea <- function(filepath) {
+  data = read.table(filepath, skip = 6)
+  colnames(data) = c(
+    "Month",
+    "Day",
+    "Standard Time",
+    "Direct Normal Irradiance",
+    "Diffuse Horizontal Radiance"
+  )
+  data = data[ , colSums(is.na(data))==0] # checking for columns w/ NAs
+  return(data)
+}
+```
+
+```{r}
+wea_tables = lapply(
+  c(
+    "USA_CA_Fairfield/fairfield.wea",
+    "USA_CA_Napa/napa.wea",
+    "USA_CA_UC_Davis/davis.wea",
+    "USA_CA_Point/point_reyes.wea",
+    "USA_CA_Marin/marin.wea"
+  ),
+  open_wea
+)
+```
+
+
+```{r}
+lapply(wea_tables, head)
+```
+
+```{r, echo = FALSE}
+print("The numbers in [[]] correspond to the different locations. The order is: Fairfield, Napa, Davis, Point, and Marin.")
+```
+
+
+## Verifying Pvsyst Files
+
+
+#### Assumptions:
+
+Similar to the wea. files, the pvsyst files all started with the following strings of text:
+
+TMY hourly data - Standard format for importing hourly data in PVsyst - Created from EnergyPlus Weather Converter version=2022.11.03 - WMO=720576Data Source=SRC-TMYx - Site,UC-Davis-University.AP - Country,USA - Data Source,SRC-TMYx WMO=720576 - Time step,Hour - Latitude,38.533 - Longitude,-121.783 - Altitude,21 - Time Zone,-8.00 - Year,Month,Day,Hour,Minute,GHI,DHI,DNI,Tamb,WindVel,WindDir - ,,,,,W/m2,W/m2,W/m2,deg.C,m/sec,∞
+
+The data is also rectangular, with each file having the same start and end structure.
+
+
+#### Method:
+
+I did the same process for pvsyst as for wea., however I skipped the first 14 lines for the pvsyst files.
+
+
+
+
