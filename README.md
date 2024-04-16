@@ -7,6 +7,9 @@ This repo contains in-depth projects that utilize skills related to data science
 
 - Functional Programming
 - Regex
+  
+<img width="789" alt="image" src="https://github.com/ssunsonic/Data-Science-Fundamentals/assets/104031760/13e6e3f9-1236-4a1c-a030-eddda460cb7c">
+
 - Web Scraping
 - Querying using SQL
 - Debugging
