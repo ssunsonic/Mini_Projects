@@ -1,9 +1,8 @@
-# Data-Science-Fundamentals
-This repo contains in-depth projects that utilize skills related to data science. It is all done in R, and highlights proficiency in the following practices:
+# 5 Cool Mini-Projects in R
+*This repo contains projects that utilize skills related to data science, such as web scraping, complex SQL querying, and proper data handling. Each project focused on developing skill in a branch of data science*:
 
-- Reading in data properly from various file formats // Data Wrangling // Data Visualization
-- Functional Programming
-- Regex
-- Web Scraping
-- Querying using SQL
-- Debugging
+1. Reading in Data properly from various file formats, Functional Programming
+2. Regular Expressions for Data Retrieval
+3. SQL in R, >2GB data 
+4. Web Scraping Techniques, XML
+5. Debugging, function Vectorization
